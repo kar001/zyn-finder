@@ -426,6 +426,68 @@ body {
   line-height: 1.45;
 }
 
+/* ZIP Search */
+.zip-row {
+  display: flex;
+  gap: 6px;
+}
+
+.zip-input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1.5px solid var(--zyn-border);
+  font-size: 0.85rem;
+  outline: none;
+  font-family: inherit;
+}
+
+.zip-input:focus {
+  border-color: var(--zyn-blue);
+}
+
+.zip-btn {
+  padding: 8px 14px;
+  background: var(--zyn-blue);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.zip-btn:hover { opacity: 0.9; }
+.zip-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.zip-error {
+  font-size: 0.75rem;
+  color: #dc3545;
+  margin-top: 4px;
+}
+
+.store-verified {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--zyn-success);
+  font-weight: 600;
+  margin-left: 2px;
+}
+
+.gps-link {
+  font-size: 0.75rem;
+  color: var(--zyn-blue);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-top: 5px;
+  text-decoration: underline;
+  display: inline-block;
+}
+
 /* Mobile */
 @media (max-width: 700px) {
   .app-layout {

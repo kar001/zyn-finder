@@ -1,7 +1,7 @@
 import './globals.css'
 
 export const metadata = {
-  title: 'Zyn Finder — Find Flavored Zyn Near You',
+  title: 'Flavored Zynn Finder — Find Flavored Zyn Near You',
   description: 'Locate nearby gas stations and convenience stores that carry flavored Zyn nicotine pouches.',
 }
 

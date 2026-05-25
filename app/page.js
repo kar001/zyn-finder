@@ -3,13 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { GoogleMap, useJsApiLoader, Marker, InfoWindow } from '@react-google-maps/api'
 
-// ─── Flavor options ───────────────────────────────────────────────────────────
-
-const ZYN_FLAVORS = [
-  'All Flavors', 'Cool Mint', 'Spearmint', 'Citrus',
-  'Cinnamon', 'Coffee', 'Peppermint', 'Wintergreen', 'Smooth', 'Menthol',
-]
-
 const RADIUS_OPTIONS = [
   { label: '5 miles',  value: 8047  },
   { label: '10 miles', value: 16093 },
@@ -30,8 +23,17 @@ const BANNED_STATE_NAMES = {
 // City-level bans. Values are lowercase city names as returned by Google Geocoding API.
 // Source: Americans for Nonsmokers' Rights Foundation (Jan 2026), Truth Initiative (Dec 2025)
 const BANNED_CITIES = {
-  // Ohio — 5 localities (Columbus, Toledo, Bexley, Worthington, Grandview Heights)
-  OH: new Set(['columbus', 'toledo', 'bexley', 'worthington', 'grandview heights']),
+  // Ohio — Franklin County cities + Toledo (all confirmed ban ordinances; joined Columbus v. Ohio lawsuit)
+  // Sources: wkyc.com, 10tv.com, statenews.org (2024-2025)
+  OH: new Set([
+    'columbus', 'toledo',
+    // Franklin County suburbs with confirmed bans
+    'bexley', 'worthington', 'grandview heights', 'upper arlington',
+    'dublin', 'gahanna', 'hilliard', 'reynoldsburg', 'whitehall',
+    // Other Ohio cities confirmed in lawsuit / ANR data
+    'cleveland', 'cincinnati', 'athens', 'barberton', 'heath',
+    'kent', 'north ridgeville', 'oberlin', 'oxford', 'springfield',
+  ]),
   // Illinois — Chicago + suburbs with independent ordinances
   IL: new Set(['chicago', 'evanston', 'river forest']),
   // Minnesota — 11 of 33 localities with the most populated municipalities listed
@@ -93,26 +95,36 @@ function detectBan(city, county, stateAbbr) {
 }
 
 /**
- * Reverse-geocode a store's actual coordinates to get its city + county,
- * then check against sourced ban data. No radius guessing — 100% accurate.
+ * Reverse-geocode a store's actual coordinates, check against all ban data,
+ * and return { isLegal, verifiedCity, verifiedState }.
+ *
+ * Fails SAFE — if geocoding fails or is inconclusive, isLegal = false so the
+ * store is hidden rather than incorrectly shown as legal.
  */
-async function checkStoreIsLegal(store) {
+async function verifyStore(store) {
   const loc = store.geometry?.location
-  if (!loc) return true
+  if (!loc) return { isLegal: false, verifiedCity: '', verifiedState: '' }
+
   const lat = typeof loc.lat === 'function' ? loc.lat() : loc.lat
   const lng = typeof loc.lng === 'function' ? loc.lng() : loc.lng
 
   try {
     const res = await fetch(`/api/geocode?lat=${lat}&lng=${lng}`)
+    if (!res.ok) return { isLegal: false, verifiedCity: '', verifiedState: '' }
     const { city = '', county = '', stateAbbr = '' } = await res.json()
 
-    if (BANNED_STATES.has(stateAbbr)) return false
-    if (BANNED_CITIES[stateAbbr]?.has(city.toLowerCase())) return false
-    if (BANNED_COUNTIES[stateAbbr]?.has(county.toLowerCase())) return false
+    // Must have at least a state to trust the result
+    if (!stateAbbr) return { isLegal: false, verifiedCity: '', verifiedState: '' }
 
-    return true
+    const banned =
+      BANNED_STATES.has(stateAbbr) ||
+      BANNED_CITIES[stateAbbr]?.has(city.toLowerCase()) ||
+      BANNED_COUNTIES[stateAbbr]?.has(county.toLowerCase())
+
+    return { isLegal: !banned, verifiedCity: city, verifiedState: stateAbbr }
   } catch {
-    return true // if geocoding fails, show the store rather than hide it
+    // Fail safe: can't verify → don't show
+    return { isLegal: false, verifiedCity: '', verifiedState: '' }
   }
 }
 
@@ -128,12 +140,8 @@ function haversineDistance(from, to) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-function buildCallScript(storeName, flavor) {
-  const flavorLine =
-    flavor === 'All Flavors'
-      ? 'any flavored Zyn nicotine pouches'
-      : `${flavor} flavored Zyn nicotine pouches`
-  return `Hi! Quick question — do you currently have ${flavorLine} in stock? Specifically the Zyn brand pouches.\n\nIf so, what strengths do you have available — 3mg or 6mg?\n\nThank you!`
+function buildCallScript(storeName) {
+  return `Hi! Quick question — do you currently have any flavored Zyn nicotine pouches in stock? Specifically the Zyn brand pouches.\n\nIf so, what strengths do you have available — 3mg or 6mg?\n\nThank you!`
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -148,8 +156,8 @@ function StarRating({ rating }) {
   )
 }
 
-function CallScriptModal({ store, flavor, onClose }) {
-  const script = buildCallScript(store.name, flavor)
+function CallScriptModal({ store, onClose }) {
+  const script = buildCallScript(store.name)
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
     navigator.clipboard.writeText(script)
@@ -161,8 +169,7 @@ function CallScriptModal({ store, flavor, onClose }) {
       <div className="modal" onClick={e => e.stopPropagation()}>
         <h3>Call Script</h3>
         <p className="modal-sub">
-          Use this when you call <strong>{store.name}</strong> to ask about{' '}
-          {flavor === 'All Flavors' ? 'Zyn' : flavor + ' Zyn'}
+          Use this when you call <strong>{store.name}</strong> to ask about flavored Zyn
         </p>
         <div className="script-box">{script}</div>
         <div className="modal-actions">
@@ -181,7 +188,7 @@ function CallScriptModal({ store, flavor, onClose }) {
   )
 }
 
-function StoreCard({ store, isSelected, flavor, onSelect, userLocation }) {
+function StoreCard({ store, isSelected, onSelect }) {
   const [showScript, setShowScript] = useState(false)
   const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(store.vicinity || store.name)}&destination_place_id=${store.place_id}`
   const isOpen = store.opening_hours?.open_now
@@ -198,7 +205,14 @@ function StoreCard({ store, isSelected, flavor, onSelect, userLocation }) {
           )}
           <StarRating rating={store.rating} />
         </div>
-        <div className="store-address">{store.vicinity}</div>
+        <div className="store-address">
+          {store.vicinity}
+          {store.verifiedCity && store.verifiedState && (
+            <span className="store-verified">
+              {' '}✓ {store.verifiedCity}, {store.verifiedState}
+            </span>
+          )}
+        </div>
         <div className="store-actions">
           <a className="btn-sm btn-directions" href={directionsUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
             Directions
@@ -208,22 +222,37 @@ function StoreCard({ store, isSelected, flavor, onSelect, userLocation }) {
           </button>
         </div>
       </div>
-      {showScript && <CallScriptModal store={store} flavor={flavor} onClose={() => setShowScript(false)} />}
+      {showScript && <CallScriptModal store={store} onClose={() => setShowScript(false)} />}
     </>
   )
 }
 
 // ─── Ban Banner ───────────────────────────────────────────────────────────────
 
-function BanBanner({ ban }) {
+function driveETA(distanceMiles) {
+  const mph = distanceMiles < 3 ? 20 : distanceMiles < 10 ? 28 : distanceMiles < 25 ? 40 : 55
+  const mins = Math.round((distanceMiles / mph) * 60)
+  return mins < 60 ? `~${mins} min drive` : `~${Math.floor(mins / 60)}h ${mins % 60}m drive`
+}
+
+function BanBanner({ ban, nearestStore }) {
   if (!ban) return null
   return (
     <div className="ban-banner">
       <span className="ban-icon">🚫</span>
       <div>
-        <strong>Flavored Zyn is banned in {ban.label}{ban.wholeState ? '' : ', ' + ban.stateAbbr}.</strong>
-        <br />
-        Showing nearest legal stores outside {ban.wholeState ? ban.label : ban.label} →
+        <strong>
+          Flavored Zyn is banned in {ban.label}{ban.wholeState ? '' : ', ' + ban.stateAbbr}.
+        </strong>
+        {nearestStore ? (
+          <p>
+            Nearest legal store:{' '}
+            <strong>{nearestStore.name}</strong> —{' '}
+            {nearestStore.distance.toFixed(1)} mi away ({driveETA(nearestStore.distance)})
+          </p>
+        ) : (
+          <p>Searching for legal stores outside {ban.label}…</p>
+        )}
       </div>
     </div>
   )
@@ -240,13 +269,15 @@ const MAP_OPTIONS = {
 export default function Home() {
   const [userLocation, setUserLocation]   = useState(null)
   const [stores, setStores]               = useState([])
-  const [selectedFlavor, setSelectedFlavor] = useState('All Flavors')
   const [selectedStore, setSelectedStore] = useState(null)
   const [radius, setRadius]               = useState(16093) // 10 miles default
   const [loading, setLoading]             = useState(false)
   const [locationError, setLocationError] = useState(null)
   const [fetchError, setFetchError]       = useState(null)
   const [ban, setBan]                     = useState(null)  // current ban info or null
+  const [zipInput, setZipInput]           = useState('')
+  const [zipError, setZipError]           = useState(null)
+  const [zipLoading, setZipLoading]       = useState(false)
   const mapRef = useRef(null)
 
   const { isLoaded, loadError } = useJsApiLoader({
@@ -304,9 +335,13 @@ export default function Home() {
         distance: haversineDistance(userLocation, s.geometry.location),
       }))
 
-      // Geocode each store's coordinates to get its actual city, then filter
-      const legalFlags = await Promise.all(all.map(s => checkStoreIsLegal(s)))
-      const legal = all.filter((_, i) => legalFlags[i])
+      // Reverse-geocode every store's actual coordinates, cross-check against
+      // all ban data, and attach verifiedCity/verifiedState for display.
+      // Fails safe: stores that can't be verified are excluded.
+      const verified = await Promise.all(all.map(s => verifyStore(s)))
+      const legal = all
+        .map((s, i) => ({ ...s, ...verified[i] }))
+        .filter(s => s.isLegal)
       legal.sort((a, b) => a.distance - b.distance)
 
       setStores(legal)
@@ -327,6 +362,27 @@ export default function Home() {
     }
   }, [selectedStore])
 
+  // Zip code search — forward geocode zip → lat/lng, then let existing effects handle ban + stores
+  const handleZipSearch = useCallback(async () => {
+    const zip = zipInput.trim()
+    if (!zip) return
+    setZipLoading(true)
+    setZipError(null)
+    setLocationError(null)
+    setBan(null)
+    try {
+      const res = await fetch(`/api/geocode?zip=${encodeURIComponent(zip)}`)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      if (data.error || !data.lat) throw new Error()
+      setUserLocation({ lat: data.lat, lng: data.lng })
+      // Effect 2 will fire on userLocation change and detect ban automatically
+    } catch {
+      setZipError('ZIP code not found. Please try again.')
+    }
+    setZipLoading(false)
+  }, [zipInput])
+
   const onMapLoad = useCallback(map => { mapRef.current = map }, [])
   const mapCenter = selectedStore
     ? selectedStore.geometry.location
@@ -336,25 +392,37 @@ export default function Home() {
     <>
       <header className="header">
         <span style={{ fontSize: '1.5rem' }}>⚡</span>
-        <h1>Zyn Finder</h1>
+        <h1>Flavored Zynn Finder</h1>
         <span className="subtitle">Nearest legal stores · Flavored Zyn</span>
       </header>
 
-      <BanBanner ban={ban} />
+      <BanBanner ban={ban} nearestStore={stores[0] || null} />
 
       <div className="app-layout">
         <aside className="sidebar">
           <div className="controls">
-            {/* Flavor */}
+            {/* ZIP code search */}
             <div>
-              <label>Filter by Flavor</label>
-              <div className="flavor-grid">
-                {ZYN_FLAVORS.map(f => (
-                  <button key={f} className={`flavor-chip ${selectedFlavor === f ? 'active' : ''}`} onClick={() => setSelectedFlavor(f)}>
-                    {f}
-                  </button>
-                ))}
+              <label>Search by ZIP Code</label>
+              <div className="zip-row">
+                <input
+                  className="zip-input"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="e.g. 43035"
+                  value={zipInput}
+                  maxLength={10}
+                  onChange={e => setZipInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleZipSearch()}
+                />
+                <button className="zip-btn" onClick={handleZipSearch} disabled={!zipInput.trim() || zipLoading}>
+                  {zipLoading ? '…' : 'Search'}
+                </button>
               </div>
+              {zipError && <div className="zip-error">{zipError}</div>}
+              <button className="gps-link" onClick={() => { setZipInput(''); getLocation() }}>
+                📍 Use my current location instead
+              </button>
             </div>
 
             {/* Radius */}
@@ -410,9 +478,6 @@ export default function Home() {
               <>
                 <div className="store-count">
                   {stores.length} legal store{stores.length !== 1 ? 's' : ''} found
-                  {selectedFlavor !== 'All Flavors' && (
-                    <span style={{ color: '#0056b3' }}> · {selectedFlavor}</span>
-                  )}
                   {ban && <span style={{ color: '#c0392b' }}> · outside {ban.label}</span>}
                 </div>
                 {stores.map(store => (
@@ -420,9 +485,7 @@ export default function Home() {
                     key={store.place_id}
                     store={store}
                     isSelected={selectedStore?.place_id === store.place_id}
-                    flavor={selectedFlavor}
                     onSelect={setSelectedStore}
-                    userLocation={userLocation}
                   />
                 ))}
               </>
