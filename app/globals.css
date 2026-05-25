@@ -394,6 +394,38 @@ body {
 .store-list::-webkit-scrollbar-track { background: transparent; }
 .store-list::-webkit-scrollbar-thumb { background: var(--zyn-border); border-radius: 4px; }
 
+/* Ban Banner */
+.ban-banner {
+  background: #fff3cd;
+  border: 1.5px solid #f0ad4e;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 10px 8px 4px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.ban-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.ban-banner strong {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #7d4e00;
+  display: block;
+  margin-bottom: 3px;
+}
+
+.ban-banner p {
+  font-size: 0.8rem;
+  color: #7d4e00;
+  line-height: 1.45;
+}
+
 /* Mobile */
 @media (max-width: 700px) {
   .app-layout {

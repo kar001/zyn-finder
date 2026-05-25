@@ -3,46 +3,82 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { GoogleMap, useJsApiLoader, Marker, InfoWindow } from '@react-google-maps/api'
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── Flavor options ───────────────────────────────────────────────────────────
 
 const ZYN_FLAVORS = [
-  'All Flavors',
-  'Cool Mint',
-  'Spearmint',
-  'Citrus',
-  'Cinnamon',
-  'Coffee',
-  'Peppermint',
-  'Wintergreen',
-  'Smooth',
-  'Menthol',
+  'All Flavors', 'Cool Mint', 'Spearmint', 'Citrus',
+  'Cinnamon', 'Coffee', 'Peppermint', 'Wintergreen', 'Smooth', 'Menthol',
 ]
 
 const RADIUS_OPTIONS = [
-  { label: '1 mile', value: 1609 },
-  { label: '3 miles', value: 4828 },
-  { label: '5 miles', value: 8047 },
+  { label: '5 miles',  value: 8047  },
   { label: '10 miles', value: 16093 },
   { label: '25 miles', value: 40234 },
+  { label: '50 miles', value: 80467 },
 ]
 
-const MAP_OPTIONS = {
-  disableDefaultUI: false,
-  zoomControl: true,
-  streetViewControl: false,
-  mapTypeControl: false,
-  fullscreenControl: false,
-  styles: [
-    { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-  ],
+// ─── Banned jurisdictions ─────────────────────────────────────────────────────
+// Flavored tobacco / nicotine-pouch bans by jurisdiction.
+// 'stateAbbr' = entire state is banned.
+// 'cities' = only these municipalities within that state are banned.
+
+const BANNED_JURISDICTIONS = [
+  // ── Statewide bans ──
+  { stateAbbr: 'CA', stateName: 'California',    cities: [] }, // Prop 31 (2022)
+  { stateAbbr: 'MA', stateName: 'Massachusetts',  cities: [] }, // Chapter 133 (2020)
+  { stateAbbr: 'RI', stateName: 'Rhode Island',   cities: [] }, // statewide 2020
+
+  // ── City / county bans ──
+  { stateAbbr: 'OH', stateName: 'Ohio', cities: ['Columbus'] },
+  {
+    stateAbbr: 'NY', stateName: 'New York',
+    cities: ['New York City', 'New York', 'Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'],
+  },
+  { stateAbbr: 'IL', stateName: 'Illinois',  cities: ['Chicago'] },
+  { stateAbbr: 'MD', stateName: 'Maryland',  cities: ['Baltimore'] },
+  { stateAbbr: 'MN', stateName: 'Minnesota', cities: ['Minneapolis', 'Saint Paul', 'St. Paul'] },
+  { stateAbbr: 'OR', stateName: 'Oregon',    cities: ['Portland'] },
+  { stateAbbr: 'WA', stateName: 'Washington', cities: ['Seattle'] },
+  { stateAbbr: 'CO', stateName: 'Colorado',  cities: ['Denver', 'Boulder'] },
+  { stateAbbr: 'AZ', stateName: 'Arizona',   cities: ['Tucson'] },
+]
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Check if a {city, stateAbbr} is in a banned jurisdiction. Returns ban info or null. */
+function detectBan(city, stateAbbr) {
+  for (const j of BANNED_JURISDICTIONS) {
+    if (j.stateAbbr !== stateAbbr) continue
+    if (j.cities.length === 0) {
+      // Whole state banned
+      return { label: j.stateName, wholeState: true, stateAbbr }
+    }
+    const cityLower = city.toLowerCase()
+    if (j.cities.some(c => cityLower.includes(c.toLowerCase()))) {
+      return { label: city, wholeState: false, stateAbbr }
+    }
+  }
+  return null
 }
 
-const LIBRARIES = ['places']
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+/** Return true if this store's vicinity is inside a known banned jurisdiction. */
+function storeIsLegal(vicinity = '') {
+  const v = vicinity.toLowerCase()
+  for (const j of BANNED_JURISDICTIONS) {
+    // Whole-state ban: look for the state abbreviation at end of address like ", CA" or ", CA 9xxxx"
+    if (j.cities.length === 0) {
+      if (new RegExp(`,\\s*${j.stateAbbr}\\b`, 'i').test(vicinity)) return false
+    } else {
+      // City ban: check if a banned city name + matching state appears in vicinity
+      if (!new RegExp(`,\\s*${j.stateAbbr}\\b`, 'i').test(vicinity)) continue
+      if (j.cities.some(c => v.includes(c.toLowerCase()))) return false
+    }
+  }
+  return true
+}
 
 function haversineDistance(from, to) {
-  const R = 3959 // miles
+  const R = 3959
   const dLat = ((to.lat - from.lat) * Math.PI) / 180
   const dLng = ((to.lng - from.lng) * Math.PI) / 180
   const a =
@@ -61,6 +97,8 @@ function buildCallScript(storeName, flavor) {
   return `Hi! Quick question — do you currently have ${flavorLine} in stock? Specifically the Zyn brand pouches.\n\nIf so, what strengths do you have available — 3mg or 6mg?\n\nThank you!`
 }
 
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
 function StarRating({ rating }) {
   if (!rating) return null
   const stars = Math.round(rating)
@@ -71,21 +109,17 @@ function StarRating({ rating }) {
   )
 }
 
-// ─── Call Script Modal ───────────────────────────────────────────────────────
-
 function CallScriptModal({ store, flavor, onClose }) {
   const script = buildCallScript(store.name, flavor)
   const [copied, setCopied] = useState(false)
-
   const handleCopy = () => {
     navigator.clipboard.writeText(script)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
-
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
         <h3>Call Script</h3>
         <p className="modal-sub">
           Use this when you call <strong>{store.name}</strong> to ask about{' '}
@@ -95,11 +129,7 @@ function CallScriptModal({ store, flavor, onClose }) {
         <div className="modal-actions">
           <button className="btn-close" onClick={onClose}>Close</button>
           {store.formatted_phone_number && (
-            <a
-              className="btn-sm btn-call"
-              href={`tel:${store.formatted_phone_number}`}
-              style={{ textDecoration: 'none' }}
-            >
+            <a className="btn-sm btn-call" href={`tel:${store.formatted_phone_number}`} style={{ textDecoration: 'none' }}>
               Call Now
             </a>
           )}
@@ -112,23 +142,13 @@ function CallScriptModal({ store, flavor, onClose }) {
   )
 }
 
-// ─── Store Card ──────────────────────────────────────────────────────────────
-
-function StoreCard({ store, isSelected, flavor, onSelect }) {
+function StoreCard({ store, isSelected, flavor, onSelect, userLocation }) {
   const [showScript, setShowScript] = useState(false)
-
-  const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-    store.vicinity || store.name
-  )}&destination_place_id=${store.place_id}`
-
+  const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(store.vicinity || store.name)}&destination_place_id=${store.place_id}`
   const isOpen = store.opening_hours?.open_now
-
   return (
     <>
-      <div
-        className={`store-card ${isSelected ? 'selected' : ''}`}
-        onClick={() => onSelect(store)}
-      >
+      <div className={`store-card ${isSelected ? 'selected' : ''}`} onClick={() => onSelect(store)}>
         <div className="store-name">{store.name}</div>
         <div className="store-meta">
           <span className="store-distance">{store.distance?.toFixed(1)} mi</span>
@@ -141,49 +161,53 @@ function StoreCard({ store, isSelected, flavor, onSelect }) {
         </div>
         <div className="store-address">{store.vicinity}</div>
         <div className="store-actions">
-          <a
-            className="btn-sm btn-directions"
-            href={directionsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <a className="btn-sm btn-directions" href={directionsUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
             Directions
           </a>
-          <button
-            className="btn-sm btn-script"
-            onClick={(e) => {
-              e.stopPropagation()
-              setShowScript(true)
-            }}
-          >
+          <button className="btn-sm btn-script" onClick={e => { e.stopPropagation(); setShowScript(true) }}>
             Call Script
           </button>
         </div>
       </div>
-
-      {showScript && (
-        <CallScriptModal
-          store={store}
-          flavor={flavor}
-          onClose={() => setShowScript(false)}
-        />
-      )}
+      {showScript && <CallScriptModal store={store} flavor={flavor} onClose={() => setShowScript(false)} />}
     </>
   )
 }
 
-// ─── Main Page ───────────────────────────────────────────────────────────────
+// ─── Ban Banner ───────────────────────────────────────────────────────────────
+
+function BanBanner({ ban }) {
+  if (!ban) return null
+  return (
+    <div className="ban-banner">
+      <span className="ban-icon">🚫</span>
+      <div>
+        <strong>Flavored Zyn is banned in {ban.label}{ban.wholeState ? '' : ', ' + ban.stateAbbr}.</strong>
+        <br />
+        Showing nearest legal stores outside {ban.wholeState ? ban.label : ban.label} →
+      </div>
+    </div>
+  )
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
+const LIBRARIES = ['places']
+const MAP_OPTIONS = {
+  zoomControl: true, streetViewControl: false, mapTypeControl: false, fullscreenControl: false,
+  styles: [{ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] }],
+}
 
 export default function Home() {
-  const [userLocation, setUserLocation] = useState(null)
-  const [stores, setStores] = useState([])
+  const [userLocation, setUserLocation]   = useState(null)
+  const [stores, setStores]               = useState([])
   const [selectedFlavor, setSelectedFlavor] = useState('All Flavors')
   const [selectedStore, setSelectedStore] = useState(null)
-  const [radius, setRadius] = useState(8047) // 5 miles default
-  const [loading, setLoading] = useState(false)
+  const [radius, setRadius]               = useState(16093) // 10 miles default
+  const [loading, setLoading]             = useState(false)
   const [locationError, setLocationError] = useState(null)
-  const [fetchError, setFetchError] = useState(null)
+  const [fetchError, setFetchError]       = useState(null)
+  const [ban, setBan]                     = useState(null)  // current ban info or null
   const mapRef = useRef(null)
 
   const { isLoaded, loadError } = useJsApiLoader({
@@ -192,50 +216,60 @@ export default function Home() {
     libraries: LIBRARIES,
   })
 
-  // Get user location on mount
+  // 1. Get GPS location
   const getLocation = useCallback(() => {
     setLocationError(null)
+    setBan(null)
     if (!navigator.geolocation) {
       setLocationError('Geolocation is not supported by your browser.')
       return
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude })
-      },
-      () => {
-        setLocationError(
-          'Could not get your location. Please allow location access and try again.'
-        )
-      },
+      pos => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => setLocationError('Could not get your location. Please allow location access and try again.'),
       { timeout: 10000 }
     )
   }, [])
 
-  useEffect(() => {
-    getLocation()
-  }, [getLocation])
+  useEffect(() => { getLocation() }, [getLocation])
 
-  // Fetch stores whenever location or radius changes
+  // 2. When we have location, reverse-geocode to detect bans
+  useEffect(() => {
+    if (!userLocation) return
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/geocode?lat=${userLocation.lat}&lng=${userLocation.lng}`)
+        const data = await res.json()
+        const detectedBan = detectBan(data.city || '', data.stateAbbr || '')
+        setBan(detectedBan)
+        // If banned, bump radius to 25 miles to find stores outside city limits
+        if (detectedBan) setRadius(40234)
+      } catch {
+        // silently ignore geocode errors — just show all stores
+      }
+    })()
+  }, [userLocation])
+
+  // 3. Fetch and filter stores
   const fetchStores = useCallback(async () => {
     if (!userLocation) return
     setLoading(true)
     setFetchError(null)
     try {
-      const res = await fetch(
-        `/api/places?lat=${userLocation.lat}&lng=${userLocation.lng}&radius=${radius}`
-      )
+      const res = await fetch(`/api/places?lat=${userLocation.lat}&lng=${userLocation.lng}&radius=${radius}`)
       if (!res.ok) throw new Error('API error')
       const data = await res.json()
 
-      const withDistance = (data.results || [])
-        .map((s) => ({
-          ...s,
-          distance: haversineDistance(userLocation, s.geometry.location),
-        }))
-        .sort((a, b) => a.distance - b.distance)
+      const all = (data.results || []).map(s => ({
+        ...s,
+        distance: haversineDistance(userLocation, s.geometry.location),
+      }))
 
-      setStores(withDistance)
+      // Filter out any stores in banned jurisdictions
+      const legal = all.filter(s => storeIsLegal(s.vicinity))
+      legal.sort((a, b) => a.distance - b.distance)
+
+      setStores(legal)
       setSelectedStore(null)
     } catch {
       setFetchError('Failed to fetch nearby stores. Check your API key and try again.')
@@ -243,11 +277,9 @@ export default function Home() {
     setLoading(false)
   }, [userLocation, radius])
 
-  useEffect(() => {
-    if (userLocation) fetchStores()
-  }, [fetchStores, userLocation])
+  // Re-fetch when location or radius changes
+  useEffect(() => { if (userLocation) fetchStores() }, [fetchStores, userLocation])
 
-  // Pan map to selected store
   useEffect(() => {
     if (selectedStore && mapRef.current) {
       mapRef.current.panTo(selectedStore.geometry.location)
@@ -255,38 +287,30 @@ export default function Home() {
     }
   }, [selectedStore])
 
-  const onMapLoad = useCallback((map) => {
-    mapRef.current = map
-  }, [])
-
+  const onMapLoad = useCallback(map => { mapRef.current = map }, [])
   const mapCenter = selectedStore
     ? selectedStore.geometry.location
     : userLocation || { lat: 37.7749, lng: -122.4194 }
 
   return (
     <>
-      {/* Header */}
       <header className="header">
         <span style={{ fontSize: '1.5rem' }}>⚡</span>
         <h1>Zyn Finder</h1>
-        <span className="subtitle">Nearest stores · Flavored Zyn</span>
+        <span className="subtitle">Nearest legal stores · Flavored Zyn</span>
       </header>
 
+      <BanBanner ban={ban} />
+
       <div className="app-layout">
-        {/* ── Sidebar ── */}
         <aside className="sidebar">
-          {/* Controls */}
           <div className="controls">
-            {/* Flavor Filter */}
+            {/* Flavor */}
             <div>
               <label>Filter by Flavor</label>
               <div className="flavor-grid">
-                {ZYN_FLAVORS.map((f) => (
-                  <button
-                    key={f}
-                    className={`flavor-chip ${selectedFlavor === f ? 'active' : ''}`}
-                    onClick={() => setSelectedFlavor(f)}
-                  >
+                {ZYN_FLAVORS.map(f => (
+                  <button key={f} className={`flavor-chip ${selectedFlavor === f ? 'active' : ''}`} onClick={() => setSelectedFlavor(f)}>
                     {f}
                   </button>
                 ))}
@@ -296,41 +320,27 @@ export default function Home() {
             {/* Radius */}
             <div>
               <label>Search Radius</label>
-              <select
-                className="radius-select"
-                value={radius}
-                onChange={(e) => setRadius(Number(e.target.value))}
-              >
-                {RADIUS_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
+              <select className="radius-select" value={radius} onChange={e => setRadius(Number(e.target.value))}>
+                {RADIUS_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
             </div>
 
-            <button
-              className="refresh-btn"
-              onClick={fetchStores}
-              disabled={loading || !userLocation}
-            >
+            <button className="refresh-btn" onClick={fetchStores} disabled={loading || !userLocation}>
               {loading ? 'Searching...' : 'Search Nearby'}
             </button>
           </div>
 
-          {/* Store List */}
           <div className="store-list">
             {locationError && (
               <div className="state-container">
                 <div className="state-icon">📍</div>
                 <div className="state-title">Location Required</div>
                 <div className="state-subtitle">{locationError}</div>
-                <button className="refresh-btn" style={{ marginTop: 8 }} onClick={getLocation}>
-                  Try Again
-                </button>
+                <button className="refresh-btn" style={{ marginTop: 8 }} onClick={getLocation}>Try Again</button>
               </div>
             )}
-
             {fetchError && (
               <div className="state-container">
                 <div className="state-icon">⚠️</div>
@@ -338,38 +348,41 @@ export default function Home() {
                 <div className="state-subtitle">{fetchError}</div>
               </div>
             )}
-
             {!locationError && !fetchError && loading && (
               <div className="state-container">
                 <div className="state-icon">🔍</div>
-                <div className="state-title">Finding nearby stores...</div>
-                <div className="state-subtitle">Looking within {RADIUS_OPTIONS.find(o => o.value === radius)?.label}</div>
+                <div className="state-title">
+                  {ban ? `Searching outside ${ban.label}…` : 'Finding nearby stores…'}
+                </div>
+                <div className="state-subtitle">
+                  Looking within {RADIUS_OPTIONS.find(o => o.value === radius)?.label}
+                </div>
               </div>
             )}
-
             {!locationError && !fetchError && !loading && stores.length === 0 && userLocation && (
               <div className="state-container">
                 <div className="state-icon">🏪</div>
-                <div className="state-title">No stores found</div>
+                <div className="state-title">No legal stores found</div>
                 <div className="state-subtitle">Try increasing your search radius.</div>
               </div>
             )}
-
             {!loading && stores.length > 0 && (
               <>
                 <div className="store-count">
-                  {stores.length} stores found
+                  {stores.length} legal store{stores.length !== 1 ? 's' : ''} found
                   {selectedFlavor !== 'All Flavors' && (
-                    <span style={{ color: '#0056b3' }}> · asking about {selectedFlavor}</span>
+                    <span style={{ color: '#0056b3' }}> · {selectedFlavor}</span>
                   )}
+                  {ban && <span style={{ color: '#c0392b' }}> · outside {ban.label}</span>}
                 </div>
-                {stores.map((store) => (
+                {stores.map(store => (
                   <StoreCard
                     key={store.place_id}
                     store={store}
                     isSelected={selectedStore?.place_id === store.place_id}
                     flavor={selectedFlavor}
                     onSelect={setSelectedStore}
+                    userLocation={userLocation}
                   />
                 ))}
               </>
@@ -377,27 +390,22 @@ export default function Home() {
           </div>
         </aside>
 
-        {/* ── Map ── */}
         <div className="map-container">
           {loadError && (
             <div className="state-container" style={{ height: '100%' }}>
               <div className="state-icon">🗺️</div>
               <div className="state-title">Map failed to load</div>
-              <div className="state-subtitle">
-                Check that your NEXT_PUBLIC_GOOGLE_MAPS_API_KEY is set and Maps JavaScript API is enabled.
-              </div>
+              <div className="state-subtitle">Check your NEXT_PUBLIC_GOOGLE_MAPS_API_KEY.</div>
             </div>
           )}
-
           {isLoaded && !loadError && (
             <GoogleMap
               mapContainerStyle={{ width: '100%', height: '100%' }}
               center={mapCenter}
-              zoom={userLocation ? 13 : 10}
+              zoom={userLocation ? 11 : 10}
               options={MAP_OPTIONS}
               onLoad={onMapLoad}
             >
-              {/* User location marker */}
               {userLocation && (
                 <Marker
                   position={userLocation}
@@ -412,33 +420,26 @@ export default function Home() {
                   title="You are here"
                 />
               )}
-
-              {/* Store markers */}
-              {stores.map((store) => (
+              {stores.map(store => (
                 <Marker
                   key={store.place_id}
                   position={store.geometry.location}
                   onClick={() => setSelectedStore(store)}
                   icon={{
-                    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
-                      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">
+                    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
+                      `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">
                         <path d="M16 0C7.163 0 0 7.163 0 16c0 10 16 24 16 24s16-14 16-24C32 7.163 24.837 0 16 0z"
-                          fill="${selectedStore?.place_id === store.place_id ? '#e74c3c' : '#e74c3c'}"
-                          stroke="white" stroke-width="2"/>
+                          fill="#e74c3c" stroke="white" stroke-width="2"/>
                         <circle cx="16" cy="16" r="6" fill="white"/>
-                      </svg>`)}`,
+                      </svg>`
+                    )}`,
                     scaledSize: new google.maps.Size(28, 35),
                     anchor: new google.maps.Point(14, 35),
                   }}
                 />
               ))}
-
-              {/* Info window for selected store */}
               {selectedStore && (
-                <InfoWindow
-                  position={selectedStore.geometry.location}
-                  onCloseClick={() => setSelectedStore(null)}
-                >
+                <InfoWindow position={selectedStore.geometry.location} onCloseClick={() => setSelectedStore(null)}>
                   <div className="info-window">
                     <h4>{selectedStore.name}</h4>
                     <p>{selectedStore.vicinity}</p>
@@ -457,11 +458,10 @@ export default function Home() {
               )}
             </GoogleMap>
           )}
-
           {!isLoaded && !loadError && (
             <div className="state-container" style={{ height: '100%' }}>
               <div className="state-icon">🗺️</div>
-              <div className="state-title">Loading map...</div>
+              <div className="state-title">Loading map…</div>
             </div>
           )}
         </div>
