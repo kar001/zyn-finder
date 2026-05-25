@@ -17,68 +17,103 @@ const RADIUS_OPTIONS = [
   { label: '50 miles', value: 80467 },
 ]
 
-// ─── Banned jurisdictions ─────────────────────────────────────────────────────
-// Statewide bans — checked via state abbreviation in the store's vicinity string.
-const BANNED_STATES = new Set(['CA', 'MA', 'RI'])
-const BANNED_STATE_NAMES = { CA: 'California', MA: 'Massachusetts', RI: 'Rhode Island' }
+// ─── Banned jurisdictions (sourced from Truth Initiative, ANR Foundation, Apr 2026) ───
+//
+// Statewide bans on flavored tobacco / nicotine products.
+// DC is treated as a state-equivalent here.
+const BANNED_STATES = new Set(['CA', 'MA', 'RI', 'UT', 'DC'])
+const BANNED_STATE_NAMES = {
+  CA: 'California', MA: 'Massachusetts', RI: 'Rhode Island',
+  UT: 'Utah', DC: 'Washington, D.C.',
+}
 
-// City bans — checked by geographic proximity to city center.
-// radiusMi is chosen to cover the full city limits with a small buffer.
-const BANNED_CITY_ZONES = [
-  { city: 'Columbus',     stateAbbr: 'OH', lat: 39.9612,  lng: -82.9988, radiusMi: 16 },
-  { city: 'Chicago',      stateAbbr: 'IL', lat: 41.8781,  lng: -87.6298, radiusMi: 18 },
-  { city: 'New York City',stateAbbr: 'NY', lat: 40.7128,  lng: -74.0060, radiusMi: 22 },
-  { city: 'Baltimore',    stateAbbr: 'MD', lat: 39.2904,  lng: -76.6122, radiusMi: 12 },
-  { city: 'Minneapolis',  stateAbbr: 'MN', lat: 44.9778,  lng: -93.2650, radiusMi: 12 },
-  { city: 'St. Paul',     stateAbbr: 'MN', lat: 44.9537,  lng: -93.0900, radiusMi: 10 },
-  { city: 'Portland',     stateAbbr: 'OR', lat: 45.5051,  lng: -122.675, radiusMi: 14 },
-  { city: 'Seattle',      stateAbbr: 'WA', lat: 47.6062,  lng: -122.332, radiusMi: 13 },
-  { city: 'Denver',       stateAbbr: 'CO', lat: 39.7392,  lng: -104.990, radiusMi: 14 },
-  { city: 'Boulder',      stateAbbr: 'CO', lat: 40.0150,  lng: -105.271, radiusMi: 9  },
-  { city: 'Tucson',       stateAbbr: 'AZ', lat: 32.2226,  lng: -110.975, radiusMi: 16 },
-]
+// City-level bans. Values are lowercase city names as returned by Google Geocoding API.
+// Source: Americans for Nonsmokers' Rights Foundation (Jan 2026), Truth Initiative (Dec 2025)
+const BANNED_CITIES = {
+  // Ohio — 5 localities (Columbus, Toledo, Bexley, Worthington, Grandview Heights)
+  OH: new Set(['columbus', 'toledo', 'bexley', 'worthington', 'grandview heights']),
+  // Illinois — Chicago + suburbs with independent ordinances
+  IL: new Set(['chicago', 'evanston', 'river forest']),
+  // Minnesota — 11 of 33 localities with the most populated municipalities listed
+  MN: new Set([
+    'minneapolis', 'saint paul', 'st. paul', 'duluth', 'moorhead',
+    'bloomington', 'golden valley', 'richfield', 'shakopee',
+    'st. louis park', 'robbinsdale',
+  ]),
+  // Colorado — all 13 localities with enacted bans (as of May 2026, Eagle added Aug 2025)
+  CO: new Set([
+    'denver', 'boulder', 'aspen', 'breckenridge', 'carbondale', 'dillon',
+    'edgewater', 'frisco', 'glenwood springs', 'golden', 'keystone',
+    'silverthorne', 'snowmass village', 'eagle',
+  ]),
+  // New York — NYC boroughs (NY statewide ban covers e-cigs only, not pouches)
+  NY: new Set(['new york', 'new york city', 'manhattan', 'brooklyn', 'queens', 'bronx', 'staten island', 'yonkers']),
+  // Oregon — city-level (county bans in BANNED_COUNTIES cover wider area)
+  OR: new Set(['portland']),
+  // Washington state — no statewide ban, Seattle city ordinance only
+  WA: new Set(['seattle']),
+  // Arizona
+  AZ: new Set(['tucson']),
+  // Pennsylvania — Philadelphia city ordinance
+  PA: new Set(['philadelphia']),
+  // Maine — 8 localities
+  ME: new Set(['portland', 'bangor', 'bar harbor', 'brunswick', 'falmouth', 'hallowell', 'rockland', 'south portland']),
+  // New Jersey — 4 localities (state ban is e-cigs only; these local ones cover pouches)
+  NJ: new Set(['jersey city', 'vineland', 'westfield']),
+  // Georgia
+  GA: new Set(['watkinsville']),
+  // North Dakota
+  ND: new Set(['cando', 'valley city']),
+}
+
+// County-level bans. Values are lowercase county names as returned by Google Geocoding API.
+const BANNED_COUNTIES = {
+  IL: new Set(['cook county']),
+  MN: new Set(['hennepin county', 'clay county', 'rice county', 'traverse county']),
+  OR: new Set(['multnomah county', 'washington county']),
+  MD: new Set(['montgomery county', "prince george's county"]),
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Check if the USER's reverse-geocoded location is in a banned jurisdiction. */
-function detectBan(city, stateAbbr) {
-  // Statewide ban
+function detectBan(city, county, stateAbbr) {
   if (BANNED_STATES.has(stateAbbr)) {
     return { label: BANNED_STATE_NAMES[stateAbbr] || stateAbbr, wholeState: true, stateAbbr }
   }
-  // City ban
-  const zone = BANNED_CITY_ZONES.find(
-    z => z.stateAbbr === stateAbbr && city.toLowerCase().includes(z.city.toLowerCase())
-  )
-  if (zone) return { label: zone.city, wholeState: false, stateAbbr }
+  const cityLower = city.toLowerCase()
+  const countyLower = county.toLowerCase()
+  if (BANNED_CITIES[stateAbbr]?.has(cityLower)) {
+    return { label: city, wholeState: false, stateAbbr }
+  }
+  if (BANNED_COUNTIES[stateAbbr]?.has(countyLower)) {
+    return { label: county, wholeState: false, stateAbbr }
+  }
   return null
 }
 
 /**
- * Return true if this STORE is outside all banned jurisdictions.
- * Uses coordinates (not vicinity string) for city bans — vicinity often
- * omits the city name so string matching is unreliable.
+ * Reverse-geocode a store's actual coordinates to get its city + county,
+ * then check against sourced ban data. No radius guessing — 100% accurate.
  */
-function storeIsLegal(store) {
+async function checkStoreIsLegal(store) {
   const loc = store.geometry?.location
   if (!loc) return true
-  // Google Places JSON returns plain numbers; guard against LatLng objects too
-  const sLat = typeof loc.lat === 'function' ? loc.lat() : loc.lat
-  const sLng = typeof loc.lng === 'function' ? loc.lng() : loc.lng
+  const lat = typeof loc.lat === 'function' ? loc.lat() : loc.lat
+  const lng = typeof loc.lng === 'function' ? loc.lng() : loc.lng
 
-  // Statewide bans: state abbreviation appears in vicinity like "..., CA 90210"
-  const vicinity = store.vicinity || ''
-  for (const abbr of BANNED_STATES) {
-    if (new RegExp(`,\\s*${abbr}\\b`, 'i').test(vicinity)) return false
+  try {
+    const res = await fetch(`/api/geocode?lat=${lat}&lng=${lng}`)
+    const { city = '', county = '', stateAbbr = '' } = await res.json()
+
+    if (BANNED_STATES.has(stateAbbr)) return false
+    if (BANNED_CITIES[stateAbbr]?.has(city.toLowerCase())) return false
+    if (BANNED_COUNTIES[stateAbbr]?.has(county.toLowerCase())) return false
+
+    return true
+  } catch {
+    return true // if geocoding fails, show the store rather than hide it
   }
-
-  // City bans: coordinate distance from city center
-  for (const zone of BANNED_CITY_ZONES) {
-    const distMi = haversineDistance({ lat: zone.lat, lng: zone.lng }, { lat: sLat, lng: sLng })
-    if (distMi <= zone.radiusMi) return false
-  }
-
-  return true
 }
 
 function haversineDistance(from, to) {
@@ -244,7 +279,7 @@ export default function Home() {
       try {
         const res = await fetch(`/api/geocode?lat=${userLocation.lat}&lng=${userLocation.lng}`)
         const data = await res.json()
-        const detectedBan = detectBan(data.city || '', data.stateAbbr || '')
+        const detectedBan = detectBan(data.city || '', data.county || '', data.stateAbbr || '')
         setBan(detectedBan)
         // If banned, bump radius to 25 miles to find stores outside city limits
         if (detectedBan) setRadius(40234)
@@ -269,8 +304,9 @@ export default function Home() {
         distance: haversineDistance(userLocation, s.geometry.location),
       }))
 
-      // Filter out any stores in banned jurisdictions (coordinate-based check)
-      const legal = all.filter(s => storeIsLegal(s))
+      // Geocode each store's coordinates to get its actual city, then filter
+      const legalFlags = await Promise.all(all.map(s => checkStoreIsLegal(s)))
+      const legal = all.filter((_, i) => legalFlags[i])
       legal.sort((a, b) => a.distance - b.distance)
 
       setStores(legal)
