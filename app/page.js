@@ -18,62 +18,66 @@ const RADIUS_OPTIONS = [
 ]
 
 // ─── Banned jurisdictions ─────────────────────────────────────────────────────
-// Flavored tobacco / nicotine-pouch bans by jurisdiction.
-// 'stateAbbr' = entire state is banned.
-// 'cities' = only these municipalities within that state are banned.
+// Statewide bans — checked via state abbreviation in the store's vicinity string.
+const BANNED_STATES = new Set(['CA', 'MA', 'RI'])
+const BANNED_STATE_NAMES = { CA: 'California', MA: 'Massachusetts', RI: 'Rhode Island' }
 
-const BANNED_JURISDICTIONS = [
-  // ── Statewide bans ──
-  { stateAbbr: 'CA', stateName: 'California',    cities: [] }, // Prop 31 (2022)
-  { stateAbbr: 'MA', stateName: 'Massachusetts',  cities: [] }, // Chapter 133 (2020)
-  { stateAbbr: 'RI', stateName: 'Rhode Island',   cities: [] }, // statewide 2020
-
-  // ── City / county bans ──
-  { stateAbbr: 'OH', stateName: 'Ohio', cities: ['Columbus'] },
-  {
-    stateAbbr: 'NY', stateName: 'New York',
-    cities: ['New York City', 'New York', 'Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'],
-  },
-  { stateAbbr: 'IL', stateName: 'Illinois',  cities: ['Chicago'] },
-  { stateAbbr: 'MD', stateName: 'Maryland',  cities: ['Baltimore'] },
-  { stateAbbr: 'MN', stateName: 'Minnesota', cities: ['Minneapolis', 'Saint Paul', 'St. Paul'] },
-  { stateAbbr: 'OR', stateName: 'Oregon',    cities: ['Portland'] },
-  { stateAbbr: 'WA', stateName: 'Washington', cities: ['Seattle'] },
-  { stateAbbr: 'CO', stateName: 'Colorado',  cities: ['Denver', 'Boulder'] },
-  { stateAbbr: 'AZ', stateName: 'Arizona',   cities: ['Tucson'] },
+// City bans — checked by geographic proximity to city center.
+// radiusMi is chosen to cover the full city limits with a small buffer.
+const BANNED_CITY_ZONES = [
+  { city: 'Columbus',     stateAbbr: 'OH', lat: 39.9612,  lng: -82.9988, radiusMi: 16 },
+  { city: 'Chicago',      stateAbbr: 'IL', lat: 41.8781,  lng: -87.6298, radiusMi: 18 },
+  { city: 'New York City',stateAbbr: 'NY', lat: 40.7128,  lng: -74.0060, radiusMi: 22 },
+  { city: 'Baltimore',    stateAbbr: 'MD', lat: 39.2904,  lng: -76.6122, radiusMi: 12 },
+  { city: 'Minneapolis',  stateAbbr: 'MN', lat: 44.9778,  lng: -93.2650, radiusMi: 12 },
+  { city: 'St. Paul',     stateAbbr: 'MN', lat: 44.9537,  lng: -93.0900, radiusMi: 10 },
+  { city: 'Portland',     stateAbbr: 'OR', lat: 45.5051,  lng: -122.675, radiusMi: 14 },
+  { city: 'Seattle',      stateAbbr: 'WA', lat: 47.6062,  lng: -122.332, radiusMi: 13 },
+  { city: 'Denver',       stateAbbr: 'CO', lat: 39.7392,  lng: -104.990, radiusMi: 14 },
+  { city: 'Boulder',      stateAbbr: 'CO', lat: 40.0150,  lng: -105.271, radiusMi: 9  },
+  { city: 'Tucson',       stateAbbr: 'AZ', lat: 32.2226,  lng: -110.975, radiusMi: 16 },
 ]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Check if a {city, stateAbbr} is in a banned jurisdiction. Returns ban info or null. */
+/** Check if the USER's reverse-geocoded location is in a banned jurisdiction. */
 function detectBan(city, stateAbbr) {
-  for (const j of BANNED_JURISDICTIONS) {
-    if (j.stateAbbr !== stateAbbr) continue
-    if (j.cities.length === 0) {
-      // Whole state banned
-      return { label: j.stateName, wholeState: true, stateAbbr }
-    }
-    const cityLower = city.toLowerCase()
-    if (j.cities.some(c => cityLower.includes(c.toLowerCase()))) {
-      return { label: city, wholeState: false, stateAbbr }
-    }
+  // Statewide ban
+  if (BANNED_STATES.has(stateAbbr)) {
+    return { label: BANNED_STATE_NAMES[stateAbbr] || stateAbbr, wholeState: true, stateAbbr }
   }
+  // City ban
+  const zone = BANNED_CITY_ZONES.find(
+    z => z.stateAbbr === stateAbbr && city.toLowerCase().includes(z.city.toLowerCase())
+  )
+  if (zone) return { label: zone.city, wholeState: false, stateAbbr }
   return null
 }
 
-/** Return true if this store's vicinity is inside a known banned jurisdiction. */
-function storeIsLegal(vicinity = '') {
-  const v = vicinity.toLowerCase()
-  for (const j of BANNED_JURISDICTIONS) {
-    // Whole-state ban: look for the state abbreviation at end of address like ", CA" or ", CA 9xxxx"
-    if (j.cities.length === 0) {
-      if (new RegExp(`,\\s*${j.stateAbbr}\\b`, 'i').test(vicinity)) return false
-    } else {
-      // City ban: check if a banned city name + matching state appears in vicinity
-      if (!new RegExp(`,\\s*${j.stateAbbr}\\b`, 'i').test(vicinity)) continue
-      if (j.cities.some(c => v.includes(c.toLowerCase()))) return false
-    }
+/**
+ * Return true if this STORE is outside all banned jurisdictions.
+ * Uses coordinates (not vicinity string) for city bans — vicinity often
+ * omits the city name so string matching is unreliable.
+ */
+function storeIsLegal(store) {
+  const loc = store.geometry?.location
+  if (!loc) return true
+  // Google Places JSON returns plain numbers; guard against LatLng objects too
+  const sLat = typeof loc.lat === 'function' ? loc.lat() : loc.lat
+  const sLng = typeof loc.lng === 'function' ? loc.lng() : loc.lng
+
+  // Statewide bans: state abbreviation appears in vicinity like "..., CA 90210"
+  const vicinity = store.vicinity || ''
+  for (const abbr of BANNED_STATES) {
+    if (new RegExp(`,\\s*${abbr}\\b`, 'i').test(vicinity)) return false
   }
+
+  // City bans: coordinate distance from city center
+  for (const zone of BANNED_CITY_ZONES) {
+    const distMi = haversineDistance({ lat: zone.lat, lng: zone.lng }, { lat: sLat, lng: sLng })
+    if (distMi <= zone.radiusMi) return false
+  }
+
   return true
 }
 
@@ -265,8 +269,8 @@ export default function Home() {
         distance: haversineDistance(userLocation, s.geometry.location),
       }))
 
-      // Filter out any stores in banned jurisdictions
-      const legal = all.filter(s => storeIsLegal(s.vicinity))
+      // Filter out any stores in banned jurisdictions (coordinate-based check)
+      const legal = all.filter(s => storeIsLegal(s))
       legal.sort((a, b) => a.distance - b.distance)
 
       setStores(legal)
