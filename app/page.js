@@ -392,7 +392,7 @@ export default function Home() {
     <>
       <header className="header">
         <span style={{ fontSize: '1.5rem' }}>⚡</span>
-        <h1>Flavored Zynn Finder</h1>
+        <h1>Flavored Zyn Finder</h1>
         <span className="subtitle">Nearest legal stores · Flavored Zyn</span>
       </header>
 
